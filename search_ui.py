@@ -16,11 +16,11 @@ def get_connection():
     cursor.execute('CREATE TABLE IF NOT EXISTS players (uuid TEXT PRIMARY KEY, username TEXT)')
     cursor.execute('''CREATE TABLE IF NOT EXISTS skyblock_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, profile_id TEXT, profile_name TEXT,
-        is_selected INTEGER DEFAULT 0, date TEXT,
+        is_selected INTEGER DEFAULT 0, date TEXT, hour TEXT,
         farming_xp REAL DEFAULT 0, mining_xp REAL DEFAULT 0, combat_xp REAL DEFAULT 0,
         foraging_xp REAL DEFAULT 0, fishing_xp REAL DEFAULT 0, enchanting_xp REAL DEFAULT 0,
         alchemy_xp REAL DEFAULT 0, taming_xp REAL DEFAULT 0, carpentry_xp REAL DEFAULT 0,
-        catacombs_xp REAL DEFAULT 0, UNIQUE(uuid, profile_id, date))''')
+        catacombs_xp REAL DEFAULT 0, UNIQUE(uuid, profile_id, hour))''')
     cursor.execute("""
         INSERT OR IGNORE INTO hourly_gexp (uuid, gexp, date, hour)
         SELECT uuid, daily_gexp, date, date || ' 23:00'
@@ -59,18 +59,17 @@ SKILL_COLUMNS = [
 
 def get_skyblock_leaderboard(stat_col):
     conn = get_connection()
-    # Most recent snapshot of each player's selected profile
     query = f"""
         SELECT
             COALESCE(p.username, s.uuid) as Player,
             s.profile_name as Profile,
             s.{stat_col} as XP,
-            s.date as Snapshot
+            s.hour as Snapshot
         FROM skyblock_stats s
         LEFT JOIN players p ON s.uuid = p.uuid
         WHERE s.is_selected = 1
-          AND s.date = (
-              SELECT MAX(date) FROM skyblock_stats
+          AND s.hour = (
+              SELECT MAX(hour) FROM skyblock_stats
               WHERE uuid = s.uuid AND is_selected = 1
           )
         ORDER BY s.{stat_col} DESC
@@ -92,10 +91,16 @@ def get_skyblock_event(stat_col, start_date, end_date):
         LEFT JOIN skyblock_stats s_start
             ON s_start.uuid = s_end.uuid
             AND s_start.profile_id = s_end.profile_id
-            AND s_start.date = ?
+            AND s_start.hour = (
+                SELECT MIN(hour) FROM skyblock_stats
+                WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND date = ?
+            )
         LEFT JOIN players p ON s_end.uuid = p.uuid
         WHERE s_end.is_selected = 1
-          AND s_end.date = ?
+          AND s_end.hour = (
+              SELECT MAX(hour) FROM skyblock_stats
+              WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND date = ?
+          )
         ORDER BY XP_Gained DESC
     """
     df = pd.read_sql_query(query, conn, params=(start_date, end_date))
@@ -176,14 +181,14 @@ if search_input:
     user_df = pd.read_sql_query(gexp_query, conn, params=(f"%{search_input}%", f"%{search_input}%"))
 
     sb_query = """
-        SELECT s.date, s.profile_name as Profile, s.is_selected as Active,
+        SELECT s.hour as Hour, s.profile_name as Profile, s.is_selected as Active,
                s.farming_xp, s.mining_xp, s.combat_xp, s.foraging_xp,
                s.fishing_xp, s.enchanting_xp, s.alchemy_xp, s.taming_xp,
                s.carpentry_xp, s.catacombs_xp
         FROM skyblock_stats s
         LEFT JOIN players p ON s.uuid = p.uuid
         WHERE s.uuid LIKE ? OR p.username LIKE ?
-        ORDER BY s.date DESC, s.is_selected DESC
+        ORDER BY s.hour DESC, s.is_selected DESC
     """
     sb_df = pd.read_sql_query(sb_query, conn, params=(f"%{search_input}%", f"%{search_input}%"))
     conn.close()

@@ -40,7 +40,6 @@ def init_db():
         )
     """)
 
-    # Migrate old skyblock_stats table if it lacks profile_id
     cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats'")
     if cursor.fetchone():
         cursor.execute("PRAGMA table_info(skyblock_stats)")
@@ -48,6 +47,9 @@ def init_db():
         if "profile_id" not in columns:
             print("[*] Migrating skyblock_stats table to add profile support...")
             cursor.execute("DROP TABLE skyblock_stats")
+        elif "hour" not in columns:
+            print("[*] Migrating skyblock_stats table to add hourly support...")
+            cursor.execute("ALTER TABLE skyblock_stats RENAME TO skyblock_stats_old")
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS skyblock_stats (
@@ -57,6 +59,7 @@ def init_db():
             profile_name TEXT,
             is_selected INTEGER DEFAULT 0,
             date TEXT,
+            hour TEXT,
             farming_xp REAL DEFAULT 0,
             mining_xp REAL DEFAULT 0,
             combat_xp REAL DEFAULT 0,
@@ -67,9 +70,24 @@ def init_db():
             taming_xp REAL DEFAULT 0,
             carpentry_xp REAL DEFAULT 0,
             catacombs_xp REAL DEFAULT 0,
-            UNIQUE(uuid, profile_id, date)
+            UNIQUE(uuid, profile_id, hour)
         )
     """)
+
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats_old'")
+    if cursor.fetchone():
+        cursor.execute("""
+            INSERT OR IGNORE INTO skyblock_stats
+                (uuid, profile_id, profile_name, is_selected, date, hour,
+                 farming_xp, mining_xp, combat_xp, foraging_xp, fishing_xp,
+                 enchanting_xp, alchemy_xp, taming_xp, carpentry_xp, catacombs_xp)
+            SELECT uuid, profile_id, profile_name, is_selected, date, date || ' 00:00',
+                   farming_xp, mining_xp, combat_xp, foraging_xp, fishing_xp,
+                   enchanting_xp, alchemy_xp, taming_xp, carpentry_xp, catacombs_xp
+            FROM skyblock_stats_old
+        """)
+        cursor.execute("DROP TABLE skyblock_stats_old")
+        print("[*] Migration to hourly skyblock_stats complete.")
     migrate_daily_gexp(cursor)
     conn.commit()
     return conn
@@ -196,19 +214,20 @@ def get_skyblock_profiles(uuid):
     return results
 
 
-def save_skyblock_stats(conn, uuid, profiles, date):
+def save_skyblock_stats(conn, uuid, profiles, hour):
     cursor = conn.cursor()
+    date = hour[:10]
     for p in profiles:
         cursor.execute(
             """
             INSERT OR IGNORE INTO skyblock_stats
-                (uuid, profile_id, profile_name, is_selected, date,
+                (uuid, profile_id, profile_name, is_selected, date, hour,
                  farming_xp, mining_xp, combat_xp, foraging_xp, fishing_xp,
                  enchanting_xp, alchemy_xp, taming_xp, carpentry_xp, catacombs_xp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                uuid, p["profile_id"], p["profile_name"], p["is_selected"], date,
+                uuid, p["profile_id"], p["profile_name"], p["is_selected"], date, hour,
                 p["farming_xp"], p["mining_xp"], p["combat_xp"], p["foraging_xp"],
                 p["fishing_xp"], p["enchanting_xp"], p["alchemy_xp"], p["taming_xp"],
                 p["carpentry_xp"], p["catacombs_xp"],
@@ -232,8 +251,10 @@ def main():
         save_to_db(conn, members)
 
         print(f"[*] Fetching SkyBlock stats for {len(members)} members...")
+        fetch_start = time.time()
         cursor = conn.cursor()
-        cursor.execute("SELECT DISTINCT uuid FROM skyblock_stats WHERE date = ?", (today,))
+        hour_key = now.strftime("%Y-%m-%d %H:00")
+        cursor.execute("SELECT DISTINCT uuid FROM skyblock_stats WHERE hour = ?", (hour_key,))
         skyblock_done = {row[0] for row in cursor.fetchall()}
         fetched = 0
         skipped = 0
@@ -244,14 +265,15 @@ def main():
                 continue
             profiles = get_skyblock_profiles(uuid)
             if profiles:
-                save_skyblock_stats(conn, uuid, profiles, today)
+                save_skyblock_stats(conn, uuid, profiles, hour_key)
                 fetched += 1
             else:
                 print(f"[!] No SkyBlock data for {uuid}")
             time.sleep(0.5)
+        elapsed = time.time() - fetch_start
         if skipped:
-            print(f"[*] Skipped SkyBlock stats for {skipped} members already saved today.")
-        print(f"[*] Saved SkyBlock stats for {fetched}/{len(members) - skipped} members.")
+            print(f"[*] Skipped SkyBlock stats for {skipped} members already saved this hour.")
+        print(f"[*] Saved SkyBlock stats for {fetched}/{len(members) - skipped} members in {elapsed:.1f}s.")
 
         conn.close()
     else:
