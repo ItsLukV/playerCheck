@@ -12,6 +12,7 @@ def get_connection():
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     cursor.execute('CREATE TABLE IF NOT EXISTS daily_gexp (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, daily_gexp INTEGER, date TEXT, UNIQUE(uuid, date))')
+    cursor.execute('CREATE TABLE IF NOT EXISTS hourly_gexp (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, gexp INTEGER, date TEXT, hour TEXT, UNIQUE(uuid, hour))')
     cursor.execute('CREATE TABLE IF NOT EXISTS players (uuid TEXT PRIMARY KEY, username TEXT)')
     cursor.execute('''CREATE TABLE IF NOT EXISTS skyblock_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, profile_id TEXT, profile_name TEXT,
@@ -20,6 +21,11 @@ def get_connection():
         foraging_xp REAL DEFAULT 0, fishing_xp REAL DEFAULT 0, enchanting_xp REAL DEFAULT 0,
         alchemy_xp REAL DEFAULT 0, taming_xp REAL DEFAULT 0, carpentry_xp REAL DEFAULT 0,
         catacombs_xp REAL DEFAULT 0, UNIQUE(uuid, profile_id, date))''')
+    cursor.execute("""
+        INSERT OR IGNORE INTO hourly_gexp (uuid, gexp, date, hour)
+        SELECT uuid, daily_gexp, date, date || ' 23:00'
+        FROM daily_gexp
+    """)
     conn.commit()
     return conn
 
@@ -27,14 +33,19 @@ def get_summary_data(days):
     conn = get_connection()
     cutoff_str = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
     query = """
+        WITH daily_totals AS (
+            SELECT uuid, date, MAX(gexp) as daily_gexp
+            FROM hourly_gexp
+            WHERE date >= ?
+            GROUP BY uuid, date
+        )
         SELECT
-            COALESCE(p.username, g.uuid) as Player,
-            SUM(g.daily_gexp) as Total_GEXP,
-            COUNT(g.date) as Days_Active
-        FROM daily_gexp g
-        LEFT JOIN players p ON g.uuid = p.uuid
-        WHERE g.date >= ?
-        GROUP BY g.uuid
+            COALESCE(p.username, d.uuid) as Player,
+            SUM(d.daily_gexp) as Total_GEXP,
+            COUNT(d.date) as Days_Active
+        FROM daily_totals d
+        LEFT JOIN players p ON d.uuid = p.uuid
+        GROUP BY d.uuid
         ORDER BY Total_GEXP DESC
     """
     df = pd.read_sql_query(query, conn, params=(cutoff_str,))
@@ -156,11 +167,11 @@ if search_input:
     conn = get_connection()
 
     gexp_query = """
-        SELECT g.date, g.daily_gexp, COALESCE(p.username, g.uuid) as name
-        FROM daily_gexp g
-        LEFT JOIN players p ON g.uuid = p.uuid
-        WHERE g.uuid LIKE ? OR p.username LIKE ?
-        ORDER BY g.date DESC
+        SELECT h.hour, h.gexp, h.date, COALESCE(p.username, h.uuid) as name
+        FROM hourly_gexp h
+        LEFT JOIN players p ON h.uuid = p.uuid
+        WHERE h.uuid LIKE ? OR p.username LIKE ?
+        ORDER BY h.hour DESC
     """
     user_df = pd.read_sql_query(gexp_query, conn, params=(f"%{search_input}%", f"%{search_input}%"))
 
@@ -182,9 +193,13 @@ if search_input:
         st.success(f"History for {player_name}")
 
         st.subheader("GEXP")
-        chart_data = user_df.set_index('date').sort_index()
-        st.line_chart(chart_data['daily_gexp'])
-        st.dataframe(user_df[['date', 'daily_gexp']], use_container_width=True, hide_index=True)
+        user_df['hour'] = pd.to_datetime(user_df['hour'])
+        user_df = user_df.sort_values('hour')
+        user_df['hourly_gain'] = user_df.groupby('date')['gexp'].diff()
+        user_df['hourly_gain'] = user_df['hourly_gain'].fillna(user_df['gexp'])
+        chart_data = user_df.set_index('hour').sort_index()
+        st.line_chart(chart_data['gexp'])
+        st.dataframe(user_df[['hour', 'gexp', 'hourly_gain']], use_container_width=True, hide_index=True)
     else:
         st.error("No data found.")
 

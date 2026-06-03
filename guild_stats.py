@@ -24,6 +24,16 @@ def init_db():
         )
     """)
     cursor.execute("""
+        CREATE TABLE IF NOT EXISTS hourly_gexp (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT,
+            gexp INTEGER,
+            date TEXT,
+            hour TEXT,
+            UNIQUE(uuid, hour)
+        )
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS players (
             uuid TEXT PRIMARY KEY,
             username TEXT
@@ -60,8 +70,21 @@ def init_db():
             UNIQUE(uuid, profile_id, date)
         )
     """)
+    migrate_daily_gexp(cursor)
     conn.commit()
     return conn
+
+
+def migrate_daily_gexp(cursor):
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='daily_gexp'"
+    )
+    if cursor.fetchone():
+        cursor.execute("""
+            INSERT OR IGNORE INTO hourly_gexp (uuid, gexp, date, hour)
+            SELECT uuid, daily_gexp, date, date || ' 23:00'
+            FROM daily_gexp
+        """)
 
 
 def get_guild_data():
@@ -107,18 +130,23 @@ def update_player_names(conn, member_list):
 
 def save_to_db(conn, member_list):
     cursor = conn.cursor()
-    today_key = datetime.now().strftime("%Y-%m-%d")
+    now = datetime.now()
+    today_key = now.strftime("%Y-%m-%d")
+    hour_key = now.strftime("%Y-%m-%d %H:00")
     for member in member_list:
         uuid = member.get("uuid")
         exp_history = member.get("expHistory", {})
         today_exp = exp_history.get(today_key, 0)
 
         cursor.execute(
-            "INSERT OR IGNORE INTO daily_gexp (uuid, daily_gexp, date) VALUES (?, ?, ?)",
-            (uuid, today_exp, today_key),
+            """
+            INSERT OR IGNORE INTO hourly_gexp (uuid, gexp, date, hour)
+            VALUES (?, ?, ?, ?)
+            """,
+            (uuid, today_exp, today_key, hour_key),
         )
     conn.commit()
-    print(f"[*] Logged GEXP for {len(member_list)} members.")
+    print(f"[*] Logged hourly GEXP for {len(member_list)} members.")
 
 
 def get_skyblock_profiles(uuid):
@@ -204,9 +232,16 @@ def main():
         save_to_db(conn, members)
 
         print(f"[*] Fetching SkyBlock stats for {len(members)} members...")
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT uuid FROM skyblock_stats WHERE date = ?", (today,))
+        skyblock_done = {row[0] for row in cursor.fetchall()}
         fetched = 0
+        skipped = 0
         for member in members:
             uuid = member.get("uuid")
+            if uuid in skyblock_done:
+                skipped += 1
+                continue
             profiles = get_skyblock_profiles(uuid)
             if profiles:
                 save_skyblock_stats(conn, uuid, profiles, today)
@@ -214,7 +249,9 @@ def main():
             else:
                 print(f"[!] No SkyBlock data for {uuid}")
             time.sleep(0.5)
-        print(f"[*] Saved SkyBlock stats for {fetched}/{len(members)} members.")
+        if skipped:
+            print(f"[*] Skipped SkyBlock stats for {skipped} members already saved today.")
+        print(f"[*] Saved SkyBlock stats for {fetched}/{len(members) - skipped} members.")
 
         conn.close()
     else:

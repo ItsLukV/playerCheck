@@ -33,4 +33,4 @@ services:
     restart: "no"
     labels:
       ofelia.enabled: "true"
-      ofelia.job-run.guild-pull.schedule: "@daily"
+      ofelia.job-run.guild-pull.schedule: "@hourly"

@@ -23,14 +23,14 @@ The `.env` file (gitignored) must contain `HYPIXEL_API_KEY`. `DB_NAME` defaults 
 
 Three scripts share a single SQLite database (`data/guild_data.db`):
 
-- **`guild_stats.py`** — daily data collector. Fetches guild member list from Hypixel (`/v2/guild`), logs GEXP, then fetches each member's SkyBlock profiles (`/v2/skyblock/profiles`) for skill and catacombs XP. Scheduled via [Ofelia](https://github.com/mcuadros/ofelia) labels on the `guild-tracker` Docker container (`@daily`).
+- **`guild_stats.py`** — hourly data collector. Fetches guild member list from Hypixel (`/v2/guild`), logs GEXP, then fetches each member's SkyBlock profiles (`/v2/skyblock/profiles`) for skill and catacombs XP. Scheduled via [Ofelia](https://github.com/mcuadros/ofelia) labels on the `guild-tracker` Docker container (`@hourly`).
 - **`search_ui.py`** — Streamlit dashboard. Reads from the DB only; never writes except for `CREATE TABLE IF NOT EXISTS` guards on startup.
 - **`backfill_gexp.py`** — one-off script to backfill historical GEXP from Hypixel's 7-day `expHistory` field.
 
 ## Database schema
 
 - `players` — uuid → username mapping, populated lazily via Mojang API on first encounter.
-- `daily_gexp` — one row per (uuid, date) with that day's GEXP. `UNIQUE(uuid, date)`, inserted with `INSERT OR IGNORE`.
+- `hourly_gexp` — one row per (uuid, hour) with that hour's GEXP snapshot. `UNIQUE(uuid, hour)`, inserted with `INSERT OR IGNORE`.
 - `skyblock_stats` — one row per (uuid, profile_id, date) with XP for 9 skills + catacombs. `is_selected=1` marks the player's active profile. Leaderboard and event queries filter on `is_selected=1`.
 
 ## Key API details

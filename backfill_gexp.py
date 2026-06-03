@@ -13,12 +13,13 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS daily_gexp (
+        CREATE TABLE IF NOT EXISTS hourly_gexp (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             uuid TEXT,
-            daily_gexp INTEGER,
+            gexp INTEGER,
             date TEXT,
-            UNIQUE(uuid, date) -- Prevents duplicate entries if run twice
+            hour TEXT,
+            UNIQUE(uuid, hour) -- Prevents duplicate entries if run twice
         )
     ''')
     conn.commit()
@@ -44,11 +45,12 @@ def backfill():
 
         for date_str, gexp_value in exp_history.items():
             try:
+                hour_key = f"{date_str} 23:00"
                 # Use INSERT OR IGNORE to avoid errors if the date already exists
                 cursor.execute('''
-                    INSERT OR IGNORE INTO daily_gexp (uuid, daily_gexp, date)
-                    VALUES (?, ?, ?)
-                ''', (uuid, gexp_value, date_str))
+                    INSERT OR IGNORE INTO hourly_gexp (uuid, gexp, date, hour)
+                    VALUES (?, ?, ?, ?)
+                ''', (uuid, gexp_value, date_str, hour_key))
                 if cursor.rowcount > 0:
                     entries_added += 1
             except sqlite3.Error as e:
