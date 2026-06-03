@@ -1,20 +1,20 @@
-import requests
-import sqlite3
-from datetime import datetime
 import os
+import sqlite3
 import time
+from datetime import datetime
 
-# --- CONFIGURATION ---
+import requests
+
+# CONFIGURATION
 API_KEY = os.getenv("HYPIXEL_API_KEY")
 GUILD_NAME = "Specialstyrken"
-# Matches the Docker volume path
 DB_NAME = os.getenv("DB_NAME", "/app/data/guild_data.db")
-# ---------------------
+
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS daily_gexp (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             uuid TEXT,
@@ -22,21 +22,54 @@ def init_db():
             date TEXT,
             UNIQUE(uuid, date)
         )
-    ''')
-    cursor.execute('''
+    """)
+    cursor.execute("""
         CREATE TABLE IF NOT EXISTS players (
             uuid TEXT PRIMARY KEY,
             username TEXT
         )
-    ''')
+    """)
+
+    # Migrate old skyblock_stats table if it lacks profile_id
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats'")
+    if cursor.fetchone():
+        cursor.execute("PRAGMA table_info(skyblock_stats)")
+        columns = {row[1] for row in cursor.fetchall()}
+        if "profile_id" not in columns:
+            print("[*] Migrating skyblock_stats table to add profile support...")
+            cursor.execute("DROP TABLE skyblock_stats")
+
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS skyblock_stats (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            uuid TEXT,
+            profile_id TEXT,
+            profile_name TEXT,
+            is_selected INTEGER DEFAULT 0,
+            date TEXT,
+            farming_xp REAL DEFAULT 0,
+            mining_xp REAL DEFAULT 0,
+            combat_xp REAL DEFAULT 0,
+            foraging_xp REAL DEFAULT 0,
+            fishing_xp REAL DEFAULT 0,
+            enchanting_xp REAL DEFAULT 0,
+            alchemy_xp REAL DEFAULT 0,
+            taming_xp REAL DEFAULT 0,
+            carpentry_xp REAL DEFAULT 0,
+            catacombs_xp REAL DEFAULT 0,
+            UNIQUE(uuid, profile_id, date)
+        )
+    """)
     conn.commit()
     return conn
+
 
 def get_guild_data():
     url = f"https://api.hypixel.net/v2/guild?name={GUILD_NAME}"
     headers = {"Api-Key": API_KEY}
     response = requests.get(url, headers=headers)
     return response.json()
+
 
 def get_username(uuid):
     try:
@@ -51,6 +84,7 @@ def get_username(uuid):
         print(f"Failed to fetch name for {uuid}: {e}")
     return None
 
+
 def update_player_names(conn, member_list):
     cursor = conn.cursor()
     new_names = 0
@@ -60,28 +94,100 @@ def update_player_names(conn, member_list):
         if cursor.fetchone() is None:
             name = get_username(uuid)
             if name:
-                cursor.execute("INSERT INTO players (uuid, username) VALUES (?, ?)", (uuid, name))
+                cursor.execute(
+                    "INSERT INTO players (uuid, username) VALUES (?, ?)", (uuid, name)
+                )
                 new_names += 1
                 print(f"[+] Discovered new player: {name}")
-                time.sleep(0.5) # Prevent Mojang API spam
+                time.sleep(0.5)  # Prevent Mojang API spam
     conn.commit()
     if new_names > 0:
         print(f"[*] Added {new_names} new names to the database.")
 
+
 def save_to_db(conn, member_list):
     cursor = conn.cursor()
-    today_key = datetime.now().strftime('%Y-%m-%d')
+    today_key = datetime.now().strftime("%Y-%m-%d")
     for member in member_list:
         uuid = member.get("uuid")
         exp_history = member.get("expHistory", {})
         today_exp = exp_history.get(today_key, 0)
 
-        cursor.execute('''
-            INSERT OR IGNORE INTO daily_gexp (uuid, daily_gexp, date)
-            VALUES (?, ?, ?)
-        ''', (uuid, today_exp, today_key))
+        cursor.execute(
+            "INSERT OR IGNORE INTO daily_gexp (uuid, daily_gexp, date) VALUES (?, ?, ?)",
+            (uuid, today_exp, today_key),
+        )
     conn.commit()
     print(f"[*] Logged GEXP for {len(member_list)} members.")
+
+
+def get_skyblock_profiles(uuid):
+    """Returns a list of stats dicts, one per SkyBlock profile."""
+    url = f"https://api.hypixel.net/v2/skyblock/profiles?uuid={uuid}"
+    headers = {"Api-Key": API_KEY}
+    try:
+        res = requests.get(url, headers=headers)
+        if res.status_code == 429:
+            print(f"Rate limited fetching SkyBlock for {uuid}. Sleeping 10s...")
+            time.sleep(10)
+            return []
+        data = res.json()
+    except Exception as e:
+        print(f"Failed to fetch SkyBlock data for {uuid}: {e}")
+        return []
+
+    if not data.get("success") or not data.get("profiles"):
+        return []
+
+    results = []
+    for profile in data["profiles"]:
+        member = profile.get("members", {}).get(uuid, {})
+        exp = member.get("player_data", {}).get("experience", {})
+        cata_xp = (
+            member.get("dungeons", {})
+            .get("dungeon_types", {})
+            .get("catacombs", {})
+            .get("experience", 0)
+            or 0
+        )
+        results.append({
+            "profile_id":    profile.get("profile_id"),
+            "profile_name":  profile.get("cute_name", "Unknown"),
+            "is_selected":   1 if profile.get("selected") else 0,
+            "farming_xp":    exp.get("SKILL_FARMING", 0) or 0,
+            "mining_xp":     exp.get("SKILL_MINING", 0) or 0,
+            "combat_xp":     exp.get("SKILL_COMBAT", 0) or 0,
+            "foraging_xp":   exp.get("SKILL_FORAGING", 0) or 0,
+            "fishing_xp":    exp.get("SKILL_FISHING", 0) or 0,
+            "enchanting_xp": exp.get("SKILL_ENCHANTING", 0) or 0,
+            "alchemy_xp":    exp.get("SKILL_ALCHEMY", 0) or 0,
+            "taming_xp":     exp.get("SKILL_TAMING", 0) or 0,
+            "carpentry_xp":  exp.get("SKILL_CARPENTRY", 0) or 0,
+            "catacombs_xp":  cata_xp,
+        })
+    return results
+
+
+def save_skyblock_stats(conn, uuid, profiles, date):
+    cursor = conn.cursor()
+    for p in profiles:
+        cursor.execute(
+            """
+            INSERT OR IGNORE INTO skyblock_stats
+                (uuid, profile_id, profile_name, is_selected, date,
+                 farming_xp, mining_xp, combat_xp, foraging_xp, fishing_xp,
+                 enchanting_xp, alchemy_xp, taming_xp, carpentry_xp, catacombs_xp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                uuid, p["profile_id"], p["profile_name"], p["is_selected"], date,
+                p["farming_xp"], p["mining_xp"], p["combat_xp"], p["foraging_xp"],
+                p["fishing_xp"], p["enchanting_xp"], p["alchemy_xp"], p["taming_xp"],
+                p["carpentry_xp"], p["catacombs_xp"],
+            ),
+        )
+    conn.commit()
+
 
 def main():
     if not API_KEY:
@@ -92,13 +198,28 @@ def main():
     if data.get("success") and data.get("guild"):
         conn = init_db()
         members = data["guild"]["members"]
-        
+        today = datetime.now().strftime("%Y-%m-%d")
+
         update_player_names(conn, members)
         save_to_db(conn, members)
-        
+
+        print(f"[*] Fetching SkyBlock stats for {len(members)} members...")
+        fetched = 0
+        for member in members:
+            uuid = member.get("uuid")
+            profiles = get_skyblock_profiles(uuid)
+            if profiles:
+                save_skyblock_stats(conn, uuid, profiles, today)
+                fetched += 1
+            else:
+                print(f"[!] No SkyBlock data for {uuid}")
+            time.sleep(0.5)
+        print(f"[*] Saved SkyBlock stats for {fetched}/{len(members)} members.")
+
         conn.close()
     else:
         print("Error: Could not fetch data. Check API key/Guild name.")
+
 
 if __name__ == "__main__":
     main()
