@@ -10,6 +10,21 @@ API_KEY = os.getenv("HYPIXEL_API_KEY")
 GUILD_NAME = "Specialstyrken"
 DB_NAME = os.getenv("DB_NAME", "/app/data/guild_data.db")
 
+_print = print
+
+
+def print(*args, **kwargs):
+    # Get the current time formatted as HH:MM:SS
+    current_time = datetime.now().strftime("[%H:%M:%S]")
+
+    # Call the original print, passing the timestamp first
+    _print(current_time, *args, **kwargs)
+
+
+# --- Test it out ---
+print("Hello, world!")
+print("This has a timestamp.")
+
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -40,7 +55,9 @@ def init_db():
         )
     """)
 
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats'")
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats'"
+    )
     if cursor.fetchone():
         cursor.execute("PRAGMA table_info(skyblock_stats)")
         columns = {row[1] for row in cursor.fetchall()}
@@ -74,7 +91,9 @@ def init_db():
         )
     """)
 
-    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats_old'")
+    cursor.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats_old'"
+    )
     if cursor.fetchone():
         cursor.execute("""
             INSERT OR IGNORE INTO skyblock_stats
@@ -196,21 +215,23 @@ def get_skyblock_profiles(uuid):
             .get("experience", 0)
             or 0
         )
-        results.append({
-            "profile_id":    profile.get("profile_id"),
-            "profile_name":  profile.get("cute_name", "Unknown"),
-            "is_selected":   1 if profile.get("selected") else 0,
-            "farming_xp":    exp.get("SKILL_FARMING", 0) or 0,
-            "mining_xp":     exp.get("SKILL_MINING", 0) or 0,
-            "combat_xp":     exp.get("SKILL_COMBAT", 0) or 0,
-            "foraging_xp":   exp.get("SKILL_FORAGING", 0) or 0,
-            "fishing_xp":    exp.get("SKILL_FISHING", 0) or 0,
-            "enchanting_xp": exp.get("SKILL_ENCHANTING", 0) or 0,
-            "alchemy_xp":    exp.get("SKILL_ALCHEMY", 0) or 0,
-            "taming_xp":     exp.get("SKILL_TAMING", 0) or 0,
-            "carpentry_xp":  exp.get("SKILL_CARPENTRY", 0) or 0,
-            "catacombs_xp":  cata_xp,
-        })
+        results.append(
+            {
+                "profile_id": profile.get("profile_id"),
+                "profile_name": profile.get("cute_name", "Unknown"),
+                "is_selected": 1 if profile.get("selected") else 0,
+                "farming_xp": exp.get("SKILL_FARMING", 0) or 0,
+                "mining_xp": exp.get("SKILL_MINING", 0) or 0,
+                "combat_xp": exp.get("SKILL_COMBAT", 0) or 0,
+                "foraging_xp": exp.get("SKILL_FORAGING", 0) or 0,
+                "fishing_xp": exp.get("SKILL_FISHING", 0) or 0,
+                "enchanting_xp": exp.get("SKILL_ENCHANTING", 0) or 0,
+                "alchemy_xp": exp.get("SKILL_ALCHEMY", 0) or 0,
+                "taming_xp": exp.get("SKILL_TAMING", 0) or 0,
+                "carpentry_xp": exp.get("SKILL_CARPENTRY", 0) or 0,
+                "catacombs_xp": cata_xp,
+            }
+        )
     return results
 
 
@@ -227,10 +248,22 @@ def save_skyblock_stats(conn, uuid, profiles, hour):
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                uuid, p["profile_id"], p["profile_name"], p["is_selected"], date, hour,
-                p["farming_xp"], p["mining_xp"], p["combat_xp"], p["foraging_xp"],
-                p["fishing_xp"], p["enchanting_xp"], p["alchemy_xp"], p["taming_xp"],
-                p["carpentry_xp"], p["catacombs_xp"],
+                uuid,
+                p["profile_id"],
+                p["profile_name"],
+                p["is_selected"],
+                date,
+                hour,
+                p["farming_xp"],
+                p["mining_xp"],
+                p["combat_xp"],
+                p["foraging_xp"],
+                p["fishing_xp"],
+                p["enchanting_xp"],
+                p["alchemy_xp"],
+                p["taming_xp"],
+                p["carpentry_xp"],
+                p["catacombs_xp"],
             ),
         )
     conn.commit()
@@ -245,7 +278,6 @@ def main():
     if data.get("success") and data.get("guild"):
         conn = init_db()
         members = data["guild"]["members"]
-        today = datetime.now().strftime("%Y-%m-%d")
 
         update_player_names(conn, members)
         save_to_db(conn, members)
@@ -253,8 +285,10 @@ def main():
         print(f"[*] Fetching SkyBlock stats for {len(members)} members...")
         fetch_start = time.time()
         cursor = conn.cursor()
-        hour_key = now.strftime("%Y-%m-%d %H:00")
-        cursor.execute("SELECT DISTINCT uuid FROM skyblock_stats WHERE hour = ?", (hour_key,))
+        hour_key = datetime.now().strftime("%Y-%m-%d %H:00")
+        cursor.execute(
+            "SELECT DISTINCT uuid FROM skyblock_stats WHERE hour = ?", (hour_key,)
+        )
         skyblock_done = {row[0] for row in cursor.fetchall()}
         fetched = 0
         skipped = 0
@@ -272,8 +306,12 @@ def main():
             time.sleep(0.5)
         elapsed = time.time() - fetch_start
         if skipped:
-            print(f"[*] Skipped SkyBlock stats for {skipped} members already saved this hour.")
-        print(f"[*] Saved SkyBlock stats for {fetched}/{len(members) - skipped} members in {elapsed:.1f}s.")
+            print(
+                f"[*] Skipped SkyBlock stats for {skipped} members already saved this hour."
+            )
+        print(
+            f"[*] Saved SkyBlock stats for {fetched}/{len(members) - skipped} members in {elapsed:.1f}s."
+        )
 
         conn.close()
     else:
