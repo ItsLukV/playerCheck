@@ -78,7 +78,7 @@ def get_skyblock_leaderboard(stat_col):
     conn.close()
     return df
 
-def get_skyblock_event(stat_col, start_date, end_date):
+def get_skyblock_event(stat_col, start_dt, end_dt):
     conn = get_connection()
     query = f"""
         SELECT
@@ -86,24 +86,26 @@ def get_skyblock_event(stat_col, start_date, end_date):
             s_end.profile_name as Profile,
             s_end.{stat_col} - COALESCE(s_start.{stat_col}, 0) as XP_Gained,
             s_end.{stat_col} as End_XP,
-            COALESCE(s_start.{stat_col}, 0) as Start_XP
+            COALESCE(s_start.{stat_col}, 0) as Start_XP,
+            s_start.hour as Start_Snapshot,
+            s_end.hour as End_Snapshot
         FROM skyblock_stats s_end
         LEFT JOIN skyblock_stats s_start
             ON s_start.uuid = s_end.uuid
             AND s_start.profile_id = s_end.profile_id
             AND s_start.hour = (
-                SELECT MIN(hour) FROM skyblock_stats
-                WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND date = ?
+                SELECT MAX(hour) FROM skyblock_stats
+                WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND hour <= ?
             )
         LEFT JOIN players p ON s_end.uuid = p.uuid
         WHERE s_end.is_selected = 1
           AND s_end.hour = (
               SELECT MAX(hour) FROM skyblock_stats
-              WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND date = ?
+              WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND hour <= ?
           )
         ORDER BY XP_Gained DESC
     """
-    df = pd.read_sql_query(query, conn, params=(start_date, end_date))
+    df = pd.read_sql_query(query, conn, params=(start_dt, end_dt))
     conn.close()
     return df
 
@@ -142,12 +144,17 @@ with sb_tab1:
         st.dataframe(lb_df, use_container_width=True, hide_index=True)
 
 with sb_tab2:
-    st.caption("Compare XP gained between two snapshot dates.")
+    st.caption("Compare XP gained between two snapshots. Uses the closest recorded snapshot at or before each chosen time.")
     col1, col2 = st.columns(2)
     with col1:
         start_date = st.date_input("Start date", value=datetime.now() - timedelta(days=7), key="ev_start")
+        start_time = st.time_input("Start time", value=datetime.strptime("00:00", "%H:%M").time(), key="ev_start_time")
     with col2:
         end_date = st.date_input("End date", value=datetime.now(), key="ev_end")
+        end_time = st.time_input("End time", value=datetime.now().replace(second=0, microsecond=0).time(), key="ev_end_time")
+
+    start_dt = f"{start_date} {start_time.strftime('%H:%M')}"
+    end_dt = f"{end_date} {end_time.strftime('%H:%M')}"
 
     event_stat = st.selectbox(
         "Stat",
@@ -157,9 +164,9 @@ with sb_tab2:
     )
 
     if st.button("Calculate Gains"):
-        ev_df = get_skyblock_event(event_stat, str(start_date), str(end_date))
+        ev_df = get_skyblock_event(event_stat, start_dt, end_dt)
         if ev_df.empty:
-            st.warning("No data found for that date range.")
+            st.warning("No data found for that date/time range.")
         else:
             st.dataframe(ev_df, use_container_width=True, hide_index=True)
 

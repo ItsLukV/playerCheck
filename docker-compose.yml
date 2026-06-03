@@ -2,35 +2,60 @@ services:
   scheduler:
     image: mcuadros/ofelia:latest
     container_name: guild-scheduler
-    user: root
-    privileged: true
-    command: daemon --docker
+    command: daemon --config=/etc/ofelia.conf
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./ofelia.conf:/etc/ofelia.conf:ro
     restart: always
+    networks:
+      - webnet
 
   guild-ui:
     build: .
     container_name: hypixel-ui
-    command: streamlit run search_ui.py --server.address=0.0.0.0
-    ports:
-      - "8501:8501"
+    command: streamlit run search_ui.py --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false
     volumes:
       - ./data:/app/data
     restart: always
     environment:
       - DB_NAME=/app/data/guild_data.db
+    networks:
+      - webnet
 
   guild-tracker:
     build: .
     container_name: hypixel-tracker
     volumes:
       - ./data:/app/data
+    env_file: .env
     environment:
-      - HYPIXEL_API_KEY=${HYPIXEL_API_KEY}
       - DB_NAME=/app/data/guild_data.db
     command: python guild_stats.py
     restart: "no"
     labels:
       ofelia.enabled: "true"
       ofelia.job-run.guild-pull.schedule: "@hourly"
+      ofelia.job-run.guild-pull.container: "hypixel-tracker"
+    networks:
+      - webnet
+
+  caddy:
+    image: caddy:latest
+    container_name: caddy
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - webnet
+
+volumes:
+  caddy_data:
+  caddy_config:
+
+networks:
+  webnet:
