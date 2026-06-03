@@ -54,6 +54,12 @@ def init_db():
             username TEXT
         )
     """)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS guild_members (
+            uuid TEXT PRIMARY KEY,
+            in_guild INTEGER DEFAULT 1
+        )
+    """)
 
     cursor.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='skyblock_stats'"
@@ -281,6 +287,16 @@ def main():
 
         update_player_names(conn, members)
         save_to_db(conn, members)
+
+        # Sync guild membership: mark everyone as left, then re-add current members
+        cursor = conn.cursor()
+        cursor.execute("UPDATE guild_members SET in_guild = 0")
+        for member in members:
+            cursor.execute(
+                "INSERT INTO guild_members (uuid, in_guild) VALUES (?, 1) ON CONFLICT(uuid) DO UPDATE SET in_guild = 1",
+                (member.get("uuid"),),
+            )
+        conn.commit()
 
         print(f"[*] Fetching SkyBlock stats for {len(members)} members...")
         fetch_start = time.time()

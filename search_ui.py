@@ -14,6 +14,7 @@ def get_connection():
     cursor.execute('CREATE TABLE IF NOT EXISTS daily_gexp (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, daily_gexp INTEGER, date TEXT, UNIQUE(uuid, date))')
     cursor.execute('CREATE TABLE IF NOT EXISTS hourly_gexp (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, gexp INTEGER, date TEXT, hour TEXT, UNIQUE(uuid, hour))')
     cursor.execute('CREATE TABLE IF NOT EXISTS players (uuid TEXT PRIMARY KEY, username TEXT)')
+    cursor.execute('CREATE TABLE IF NOT EXISTS guild_members (uuid TEXT PRIMARY KEY, in_guild INTEGER DEFAULT 1)')
     cursor.execute('''CREATE TABLE IF NOT EXISTS skyblock_stats (
         id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT, profile_id TEXT, profile_name TEXT,
         is_selected INTEGER DEFAULT 0, date TEXT, hour TEXT,
@@ -45,6 +46,7 @@ def get_summary_data(days):
             COUNT(d.date) as Days_Active
         FROM daily_totals d
         LEFT JOIN players p ON d.uuid = p.uuid
+        JOIN guild_members gm ON d.uuid = gm.uuid AND gm.in_guild = 1
         GROUP BY d.uuid
         ORDER BY Total_GEXP DESC
     """
@@ -67,6 +69,7 @@ def get_skyblock_leaderboard(stat_col):
             s.hour as Snapshot
         FROM skyblock_stats s
         LEFT JOIN players p ON s.uuid = p.uuid
+        JOIN guild_members gm ON s.uuid = gm.uuid AND gm.in_guild = 1
         WHERE s.is_selected = 1
           AND s.hour = (
               SELECT MAX(hour) FROM skyblock_stats
@@ -98,6 +101,7 @@ def get_skyblock_event(stat_col, start_dt, end_dt):
                 WHERE uuid = s_end.uuid AND profile_id = s_end.profile_id AND hour <= ?
             )
         LEFT JOIN players p ON s_end.uuid = p.uuid
+        JOIN guild_members gm ON s_end.uuid = gm.uuid AND gm.in_guild = 1
         WHERE s_end.is_selected = 1
           AND s_end.hour = (
               SELECT MAX(hour) FROM skyblock_stats
